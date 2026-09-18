@@ -29,6 +29,8 @@ from .boundary_tile import (
     make_cell_boundary_tiles,
     make_cell_boundary_tiles_row_groups,
 )
+from .colors import _create_cluster_colors, _hsv_to_hex
+from .geometry import _to_coords, _to_geometry
 from .image_info import get_image_info, resolve_xenium_morphology_ome_path
 from .landscape import (
     calc_meta_gene_data,
@@ -90,30 +92,6 @@ def _load_xenium_cluster_data(data_dir, meta_cell):
     clusters = ser_counts.index.tolist()
 
     return default_clustering, clusters, ser_counts
-
-
-def _hsv_to_hex(h: float) -> str:
-    """Convert HSV color to hex string."""
-    r, g, b = colorsys.hsv_to_rgb(h, 0.65, 0.9)
-    return f"#{int(r * 255):02x}{int(g * 255):02x}{int(b * 255):02x}"
-
-
-def _create_cluster_colors(clusters):
-    """
-    Create color mapping for clusters.
-
-    Parameters:
-    - clusters: List of cluster names
-
-    Returns:
-    - List of colors for clusters
-    """
-    n = len(clusters)
-    palette = [_hsv_to_hex(i / n) for i in range(n)]
-
-    return [
-        (palette[i] if "Blank" not in cluster else "#FFFFFF") for i, cluster in enumerate(clusters)
-    ]
 
 
 def _save_cluster_data(cell_clusters_dir, default_clustering, clusters, ser_counts):
@@ -1424,90 +1402,6 @@ def add_custom_segmentation(
         image_format=".webp",
         segmentation_approach=segmentation_parameters["segmentation_approach"],
     )
-
-
-def _to_geometry(coord_data):
-    """
-    Converts a coordinate structure back to a Shapely geometry object.
-
-    Accepts:
-      - [x, y] → Point
-      - {"exterior": [...], "interiors": [...]} → Polygon
-      - list of {"exterior": [...], "interiors": [...]} → MultiPolygon
-
-    Args:
-        coord_data (list or dict): Coordinate list or structured dict.
-
-    Returns:
-        shapely.geometry.Point, Polygon, or MultiPolygon
-
-    Raises:
-        TypeError: If the input structure is not recognized.
-    """
-
-    if isinstance(coord_data, Point | Polygon | MultiPolygon):
-        return coord_data
-
-    if (
-        isinstance(coord_data, list | tuple)
-        and all(isinstance(x, int | float) for x in coord_data)
-        and len(coord_data) == 2
-    ):
-        return Point(coord_data)
-
-    if isinstance(coord_data, dict) and "exterior" in coord_data:
-        exterior = coord_data["exterior"]
-        interiors = coord_data.get("interiors", [])
-        return Polygon(exterior, interiors)
-
-    if isinstance(coord_data, list) and all(
-        isinstance(poly, dict) and "exterior" in poly for poly in coord_data
-    ):
-        return MultiPolygon(
-            [Polygon(poly["exterior"], poly.get("interiors", [])) for poly in coord_data]
-        )
-
-    raise TypeError(f"Cannot convert {coord_data} to a Shapely geometry. Unexpected structure.")
-
-
-def _to_coords(geom):
-    """
-    Converts a Shapely geometry object to a serializable coordinate structure.
-
-    Supports:
-      - Point → [x, y]
-      - Polygon → {"exterior": [...], "interiors": [...]}
-      - MultiPolygon → list of {"exterior": [...], "interiors": [...]}
-
-    Args:
-        geom (shapely.geometry): A Shapely Point, Polygon, or MultiPolygon.
-
-    Returns:
-        list or dict: Coordinate representation suitable for serialization.
-
-    Raises:
-        TypeError: If the geometry type is unsupported.
-    """
-    if isinstance(geom, Point):
-        return list(geom.coords[0])
-    if isinstance(geom, Polygon):
-        return {
-            "exterior": [list(coord) for coord in geom.exterior.coords],
-            "interiors": [
-                [list(coord) for coord in interior.coords] for interior in geom.interiors
-            ],
-        }
-    if isinstance(geom, MultiPolygon):
-        return [
-            {
-                "exterior": [list(coord) for coord in polygon.exterior.coords],
-                "interiors": [
-                    [list(coord) for coord in interior.coords] for interior in polygon.interiors
-                ],
-            }
-            for polygon in geom.geoms
-        ]
-    raise TypeError(f"Unsupported geometry type: {type(geom)}")
 
 
 def write_xenium_transform(
