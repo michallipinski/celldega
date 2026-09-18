@@ -95,11 +95,15 @@ PUBLIC_NAMES = sorted(n for names in PUBLIC_BY_OWNER.values() for n in names)
 # Underscore-prefixed names that external code already depends on, so they cannot be
 # dropped by the move even though the leading underscore says "private".
 PRIVATE_NAMES_IN_USE = {
-    # 4 BNB notebooks, and the only private name in the current __all__.
+    # `from celldega.pre import _to_geometry` in 4 BNB notebooks; also the only private
+    # name in the current __all__.
     "_to_geometry": "notebooks/BNB_*.ipynb",
     "_to_coords": "notebooks/nbhd_class_eda.ipynb",
     "_convert_to_png": "notebooks/Visium-HD_Landscape_Pre-process.ipynb",
-    # run_pre_processing.py:216 calls this through the package: dega.pre._check_required_files
+    # The CLI pipeline reaches these through the package facade rather than importing the
+    # submodule, so they must stay attributes of celldega.pre:
+    #   grep -rn 'dega\.pre\._' src/  ->  exactly these two.
+    "_xenium_unzipper": "src/celldega/pre/run_pre_processing.py:207",
     "_check_required_files": "src/celldega/pre/run_pre_processing.py:216",
 }
 
@@ -185,3 +189,53 @@ def test_celldega_reexports_the_landscape_submodule() -> None:
     import celldega
 
     assert celldega.landscape is pre.landscape
+
+
+# --- published documentation surface -----------------------------------------
+
+
+def _griffe_public_members() -> set[str]:
+    """What ``::: celldega.pre`` in docs/python/pre/api.md resolves to.
+
+    mkdocstrings renders an *imported* member only when it is listed in ``__all__``, so
+    once implementation moves out of ``__init__.py`` every moved function becomes an alias
+    and silently drops off the API page unless ``__all__`` is corrected. Asserting this
+    here rather than via ``mkdocs build --strict`` is deliberate: a strict build already
+    fails on the current tree over unrelated docstring defects, so it gives no signal.
+    """
+    griffe = pytest.importorskip("griffe")
+    module = griffe.load("celldega.pre", search_paths=["src"])
+    return {name for name, obj in module.members.items() if obj.is_public}
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="__all__ lists 21 of 63 reachable callables; corrected when the facade lands. "
+    "Remove this marker in the same commit that fixes __all__.",
+)
+def test_every_public_name_reaches_the_docs() -> None:
+    missing = sorted(set(PUBLIC_NAMES) - _griffe_public_members())
+    assert missing == []
+
+
+def test_docs_surface_does_not_shrink() -> None:
+    """Whatever the refactor does, it must not remove names from the published page."""
+    already_published = {
+        "add_clustering_from_adata",
+        "get_image_info",
+        "main",
+        "make_trx_tiles",
+        "read_cbg_mtx",
+        "resolve_xenium_morphology_ome_path",
+        "write_cell_clusters_meta",
+        "write_gene_cell_scatter",
+        "write_gene_shapes",
+        "write_gene_shapes_streaming",
+        "write_identity_transform",
+        "write_meta_gene_for_nbhd_cloud",
+        "write_meta_slice",
+        "write_nbhd_cloud_cells",
+        "write_nbhd_cloud_dataset",
+        "write_nbhd_cloud_shapes_and_features",
+    }
+    assert already_published <= _griffe_public_members()
