@@ -208,11 +208,6 @@ def _griffe_public_members() -> set[str]:
     return {name for name, obj in module.members.items() if obj.is_public}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="__all__ lists 21 of 63 reachable callables; corrected when the facade lands. "
-    "Remove this marker in the same commit that fixes __all__.",
-)
 def test_every_public_name_reaches_the_docs() -> None:
     missing = sorted(set(PUBLIC_NAMES) - _griffe_public_members())
     assert missing == []
