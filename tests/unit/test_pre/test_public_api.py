@@ -40,6 +40,9 @@ PUBLIC_BY_OWNER = {
         "get_max_zoom_level",
         "pack_image_tiles_to_parquet",
     ],
+    "deepzoom": [
+        "write_deepzoom_pyramid",
+    ],
     "meta_cell": [
         "make_meta_cell_image_coord",
         "make_meta_gene",

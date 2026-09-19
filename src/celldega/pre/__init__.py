@@ -15,6 +15,7 @@ from .cell_clusters import (
     create_cluster_and_meta_cluster,
 )
 from .colors import _create_cluster_colors, _hsv_to_hex
+from .deepzoom import write_deepzoom_pyramid
 from .geometry import _to_coords, _to_geometry
 from .image_info import get_image_info, resolve_xenium_morphology_ome_path
 from .image_parquet import pack_image_tiles_to_parquet
@@ -96,6 +97,7 @@ __all__ = [
     "create_image_tiles_h_and_e",
     "create_image_tiles_merscope",
     "create_image_tiles_xenium",
+    "deepzoom",
     "geometry",
     "get_image_info",
     "get_max_zoom_level",
@@ -127,6 +129,7 @@ __all__ = [
     "trx_tile",
     "workflows",
     "write_cell_clusters_meta",
+    "write_deepzoom_pyramid",
     "write_gene_cell_scatter",
     "write_gene_shapes",
     "write_gene_shapes_streaming",

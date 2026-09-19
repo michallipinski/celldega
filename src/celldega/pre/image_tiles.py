@@ -1,12 +1,18 @@
 """Morphology image tiling: DeepZoom pyramids and the format conversions feeding them.
 
-This is the entire pyvips / scikit-image / tifffile surface of ``celldega.pre``, collected
-in one module so the optional ``pre`` extra is a per-module concern rather than something
-every importer of the package pays for.
+Pillow does the pixel work. It is a plain wheel, so the image pipeline no longer needs
+libvips on the host -- previously every function here failed without it, and failed badly
+(``pyvips`` was set to ``None`` on ImportError but then used unguarded, so a missing
+libvips surfaced as ``AttributeError: 'NoneType' object has no attribute 'Image'``).
 
-pyvips is guarded because it is an optional dependency (``pip install celldega[pre]``);
-scikit-image is not, because it currently arrives as a hard transitive dependency of
-spatialdata / spatialdata-io / ome-zarr.
+pyvips is still importable and still reachable via
+``make_deepzoom_pyramid(..., engine="pyvips")``, because it streams the source rather than
+decoding it whole -- which matters for multi-gigabyte morphology images. It is optional
+(``pip install celldega[pre]``) and asking for it when it is absent now raises a RuntimeError
+that says so.
+
+scikit-image and tifffile are unguarded, as before; both arrive as hard transitive
+dependencies of spatialdata / spatialdata-io / ome-zarr.
 """
 
 from pathlib import Path
@@ -14,6 +20,7 @@ from pathlib import Path
 from skimage.io import imread, imsave
 import tifffile
 
+from .deepzoom import _require_pillow, write_deepzoom_pyramid
 from .image_info import resolve_xenium_morphology_ome_path
 
 
@@ -244,12 +251,14 @@ def _reduce_image_size(image_path, scale_image=0.5, path_dega_files=""):
     Returns:
         str: Path to the resized image file.
     """
-    image = pyvips.Image.new_from_file(image_path, access="sequential")
-    resized_image = image.resize(scale_image)
-
+    Image = _require_pillow()
     new_image_name = Path(image_path).name.replace(".tif", "_downsize.tif")
     new_image_path = Path(path_dega_files) / new_image_name
-    resized_image.write_to_file(str(new_image_path))
+
+    with Image.open(image_path) as image:
+        width, height = image.size
+        size = (max(1, round(width * scale_image)), max(1, round(height * scale_image)))
+        image.resize(size, Image.LANCZOS).save(new_image_path)
 
     return str(new_image_path)
 
@@ -264,9 +273,13 @@ def _convert_to_jpeg(image_path, quality=80):
     Returns:
         str: Path to the JPEG image file.
     """
-    image = pyvips.Image.new_from_file(image_path, access="sequential")
+    Image = _require_pillow()
     new_image_path = str(Path(image_path).with_suffix(".jpeg"))
-    image.jpegsave(new_image_path, Q=quality)
+    with Image.open(image_path) as image:
+        # JPEG has no grayscale-16 or alpha mode; RGB is what vips' jpegsave produced too.
+        image.convert("L" if image.mode in {"L", "I;16", "I"} else "RGB").save(
+            new_image_path, format="JPEG", quality=quality
+        )
 
     return new_image_path
 
@@ -280,9 +293,10 @@ def _convert_to_png(image_path):
     Returns:
         str: Path to the PNG image file.
     """
-    image = pyvips.Image.new_from_file(image_path, access="sequential")
+    Image = _require_pillow()
     new_image_path = str(Path(image_path).with_suffix(".png"))
-    image.pngsave(new_image_path)
+    with Image.open(image_path) as image:
+        image.save(new_image_path, format="PNG")
 
     return new_image_path
 
@@ -297,29 +311,67 @@ def _convert_to_webp(image_path, quality=100):
     Returns:
         str: Path to the WEBP image file.
     """
-    image = pyvips.Image.new_from_file(image_path, access="sequential")
+    Image = _require_pillow()
     new_image_path = str(Path(image_path).with_suffix(".webp"))
-    image.webpsave(new_image_path, Q=quality)
+    with Image.open(image_path) as image:
+        # vips treats Q=100 as lossless for webp; match it rather than silently
+        # re-encoding lossily at the historical default.
+        image.save(new_image_path, format="WEBP", quality=quality, lossless=quality >= 100)
 
     return new_image_path
 
 
 def make_deepzoom_pyramid(
-    image_path, output_path, pyramid_name, tile_size=512, overlap=0, suffix=".jpeg"
+    image_path,
+    output_path,
+    pyramid_name,
+    tile_size=512,
+    overlap=0,
+    suffix=".jpeg",
+    engine="pillow",
 ):
-    """Creates a DeepZoom image pyramid from a JPEG image.
+    """Creates a DeepZoom image pyramid from an image.
+
+    Defaults to Pillow, which needs no libvips install. The output is layout-compatible
+    with ``vips dzsave`` -- same levels, tile grid, filenames and ``.dzi`` -- so
+    :func:`~celldega.pre.image_parquet.pack_image_tiles_to_parquet` and the viewer are
+    unaffected. Tiles are not pixel-identical between engines, because the downsampling
+    kernels differ.
 
     Args:
-        image_path (str): Path to the JPEG image file.
+        image_path (str): Path to the image file.
         output_path (str): Directory to save the DeepZoom pyramid.
         pyramid_name (str): Name of the pyramid directory.
         tile_size (int, optional): Tile size for the DeepZoom pyramid. Defaults to 512.
         overlap (int, optional): Overlap size for the DeepZoom pyramid. Defaults to 0.
         suffix (str, optional): Suffix for the DeepZoom pyramid tiles. Defaults to ".jpeg".
+        engine (str, optional): ``"pillow"`` (default) or ``"pyvips"``. pyvips streams the
+            source with ``access="sequential"`` instead of decoding it whole, which still
+            matters for the multi-gigabyte morphology images some Xenium runs produce.
 
     Returns:
         None
     """
+    if engine == "pillow":
+        write_deepzoom_pyramid(
+            image_path,
+            output_path,
+            pyramid_name,
+            tile_size=tile_size,
+            overlap=overlap,
+            suffix=suffix,
+        )
+        return
+
+    if engine != "pyvips":
+        raise ValueError(f"unknown engine: {engine!r}. Use 'pillow' or 'pyvips'.")
+
+    if pyvips is None:
+        raise RuntimeError(
+            "engine='pyvips' requires libvips and the pyvips package: "
+            "pip install 'celldega[pre]'. The default engine='pillow' needs neither."
+        )
+
     output_path = Path(output_path)
     image = pyvips.Image.new_from_file(image_path, access="sequential")
     output_path.mkdir(parents=True, exist_ok=True)
